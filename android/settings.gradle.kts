@@ -7,7 +7,7 @@ pluginManagement {
         }
         val flutterSdkPath = properties.getProperty("flutter.sdk")
             ?: System.getenv("FLUTTER_ROOT")
-            ?: throw GradleException("flutter.sdk não encontrado em local.properties nem na variável de ambiente FLUTTER_ROOT.")
+        require(flutterSdkPath != null) { "flutter.sdk não encontrado em local.properties nem na variável de ambiente FLUTTER_ROOT." }
         flutterSdkPath
     }
 
@@ -22,7 +22,7 @@ pluginManagement {
 
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
-    id("com.android.application") version "8.7.0" apply false
+    id("com.android.application") version "8.11.1" apply false
     id("org.jetbrains.kotlin.android") version "2.1.0" apply false
 }
 

@@ -1,4 +1,4 @@
-name: Build Flutter APK
+name: EcoStream App Android Build
 
 on:
   push:
@@ -23,7 +23,7 @@ jobs:
       - name: Set up Java JDK
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: 'zulu'
           java-version: '17'
 
       - name: Set up Flutter SDK
@@ -32,6 +32,9 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Make Gradlew Executable
+        run: chmod +x android/gradlew || true
+
       - name: Install dependencies
         run: flutter pub get
 
@@ -39,7 +42,7 @@ jobs:
         run: flutter test
 
       - name: Build APK (Release)
-        run: flutter build apk --release --android-skip-build-dependency-validation
+        run: flutter build apk --release --no-tree-shake-icons --android-skip-build-dependency-validation
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
