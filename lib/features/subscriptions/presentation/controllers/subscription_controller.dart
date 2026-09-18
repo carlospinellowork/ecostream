@@ -1,361 +1,349 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/constants/app_constants.dart';
+import '../../../../core/error/app_exception.dart';
+import '../../../../core/providers/core_providers.dart';
+import '../../../../core/storage/storage_keys.dart';
+import '../../../../core/utils/recurrence.dart';
+import '../../../auth/presentation/controllers/auth_controller.dart';
+import '../../../billing/domain/entitlements.dart';
+import '../../../billing/domain/plan.dart';
+import '../../data/demo_subscriptions.dart';
+import '../../data/subscription_repository.dart';
 import '../../domain/subscription_model.dart';
 
-class SubscriptionState {
-  final List<SubscriptionModel> subscriptions;
-  final bool isLoading;
-  final String searchQuery;
-  final String? selectedCategoryFilter;
-  final String statusFilter; // 'all', 'active', 'paused', 'cancelled'
-  final String sortBy; // 'next_billing', 'price_desc', 'price_asc', 'name'
+/// Estágio de carregamento. Ver CLAUDE.md §4.
+enum LoadStatus { initial, loading, ready, error }
 
+enum SubscriptionSort { nextBilling, priceDesc, priceAsc, name }
+
+enum StatusFilter { all, active, paused, cancelled }
+
+@immutable
+class SubscriptionState {
   const SubscriptionState({
-    this.subscriptions = const [],
-    this.isLoading = false,
+    this.subscriptions = const <SubscriptionModel>[],
+    this.status = LoadStatus.initial,
     this.searchQuery = '',
-    this.selectedCategoryFilter,
-    this.statusFilter = 'all',
-    this.sortBy = 'next_billing',
+    this.categoryFilter,
+    this.statusFilter = StatusFilter.all,
+    this.sortBy = SubscriptionSort.nextBilling,
+    this.errorMessage,
   });
 
-  SubscriptionState copyWith({
-    List<SubscriptionModel>? subscriptions,
-    bool? isLoading,
-    String? searchQuery,
-    String? selectedCategoryFilter,
-    String? statusFilter,
-    String? sortBy,
-  }) {
-    return SubscriptionState(
-      subscriptions: subscriptions ?? this.subscriptions,
-      isLoading: isLoading ?? this.isLoading,
-      searchQuery: searchQuery ?? this.searchQuery,
-      selectedCategoryFilter: selectedCategoryFilter,
-      statusFilter: statusFilter ?? this.statusFilter,
-      sortBy: sortBy ?? this.sortBy,
-    );
-  }
+  final List<SubscriptionModel> subscriptions;
+  final LoadStatus status;
+  final String searchQuery;
+  final String? categoryFilter;
+  final StatusFilter statusFilter;
+  final SubscriptionSort sortBy;
+  final String? errorMessage;
 
-  /// Lista filtrada e ordenada com base nos critérios atuais
+  bool get isLoading => status == LoadStatus.loading;
+
+  bool get isEmpty => status == LoadStatus.ready && subscriptions.isEmpty;
+
+  bool get hasActiveFilters =>
+      searchQuery.isNotEmpty ||
+      categoryFilter != null ||
+      statusFilter != StatusFilter.all;
+
+  /// Lista filtrada e ordenada conforme os critérios atuais.
   List<SubscriptionModel> get filteredSubscriptions {
-    var result = subscriptions.where((sub) {
-      // Filtro de busca por nome
-      if (searchQuery.isNotEmpty &&
-          !sub.name.toLowerCase().contains(searchQuery.toLowerCase())) {
-        return false;
-      }
-      // Filtro por categoria
-      if (selectedCategoryFilter != null &&
-          sub.categoryId != selectedCategoryFilter) {
-        return false;
-      }
-      // Filtro por status
-      if (statusFilter == 'active' && sub.status != SubscriptionStatus.active) {
-        return false;
-      }
-      if (statusFilter == 'paused' && sub.status != SubscriptionStatus.paused) {
-        return false;
-      }
-      if (statusFilter == 'cancelled' &&
-          sub.status != SubscriptionStatus.cancelled) {
-        return false;
-      }
-      return true;
+    final query = searchQuery.trim().toLowerCase();
+
+    final result = subscriptions.where((sub) {
+      if (query.isNotEmpty && !sub.name.toLowerCase().contains(query)) return false;
+      if (categoryFilter != null && sub.categoryId != categoryFilter) return false;
+      return switch (statusFilter) {
+        StatusFilter.all => true,
+        StatusFilter.active => sub.status == SubscriptionStatus.active,
+        StatusFilter.paused => sub.status == SubscriptionStatus.paused,
+        StatusFilter.cancelled => sub.status == SubscriptionStatus.cancelled,
+      };
     }).toList();
 
-    // Ordenação
     switch (sortBy) {
-      case 'price_desc':
-        result.sort(
-          (a, b) => b.monthlyEquivalent.compareTo(a.monthlyEquivalent),
-        );
-        break;
-      case 'price_asc':
-        result.sort(
-          (a, b) => a.monthlyEquivalent.compareTo(b.monthlyEquivalent),
-        );
-        break;
-      case 'name':
-        result.sort((a, b) => a.name.compareTo(b.name));
-        break;
-      case 'next_billing':
-      default:
+      case SubscriptionSort.priceDesc:
+        result.sort((a, b) => b.monthlyEquivalent.compareTo(a.monthlyEquivalent));
+      case SubscriptionSort.priceAsc:
+        result.sort((a, b) => a.monthlyEquivalent.compareTo(b.monthlyEquivalent));
+      case SubscriptionSort.name:
+        result.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      case SubscriptionSort.nextBilling:
         result.sort((a, b) => a.nextBillingDate.compareTo(b.nextBillingDate));
-        break;
     }
 
     return result;
   }
 
-  /// Totais consolidados
-  double get totalMonthlySpend {
-    return subscriptions
-        .where((sub) => sub.status == SubscriptionStatus.active)
-        .fold(0.0, (sum, sub) => sum + sub.monthlyEquivalent);
+  List<SubscriptionModel> get activeSubscriptions =>
+      subscriptions.where((s) => s.isActive).toList(growable: false);
+
+  double get totalMonthlySpend =>
+      activeSubscriptions.fold<double>(0, (sum, s) => sum + s.monthlyEquivalent);
+
+  double get totalAnnualSpend => totalMonthlySpend * 12.0;
+
+  int get activeCount => activeSubscriptions.length;
+
+  /// Gasto mensal agrupado por categoria, só de assinaturas ativas.
+  Map<String, double> get spendByCategory {
+    final map = <String, double>{};
+    for (final sub in activeSubscriptions) {
+      map[sub.categoryId] = (map[sub.categoryId] ?? 0) + sub.monthlyEquivalent;
+    }
+    return map;
   }
 
-  double get totalAnnualSpend {
-    return totalMonthlySpend * 12.0;
-  }
+  /// Cobranças dos próximos [days] dias, da mais próxima para a mais distante.
+  List<SubscriptionModel> upcomingBilling({int days = 7, DateTime? now}) {
+    final today = Recurrence.dateOnly(now ?? DateTime.now());
+    final limit = today.add(Duration(days: days));
 
-  int get activeCount {
-    return subscriptions
-        .where((sub) => sub.status == SubscriptionStatus.active)
-        .length;
-  }
-
-  List<SubscriptionModel> get upcomingBillingIn7Days {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final limit = today.add(const Duration(days: 7));
-
-    return subscriptions
-        .where((sub) => sub.status == SubscriptionStatus.active)
-        .where(
-          (sub) =>
-              sub.nextBillingDate.isAfter(
-                today.subtract(const Duration(days: 1)),
-              ) &&
-              sub.nextBillingDate.isBefore(limit.add(const Duration(days: 1))),
-        )
-        .toList()
+    return activeSubscriptions.where((sub) {
+      final date = Recurrence.dateOnly(sub.nextBillingDate);
+      return !date.isBefore(today) && !date.isAfter(limit);
+    }).toList()
       ..sort((a, b) => a.nextBillingDate.compareTo(b.nextBillingDate));
   }
+
+  SubscriptionState copyWith({
+    List<SubscriptionModel>? subscriptions,
+    LoadStatus? status,
+    String? searchQuery,
+    Object? categoryFilter = _unset,
+    StatusFilter? statusFilter,
+    SubscriptionSort? sortBy,
+    Object? errorMessage = _unset,
+  }) {
+    return SubscriptionState(
+      subscriptions: subscriptions ?? this.subscriptions,
+      status: status ?? this.status,
+      searchQuery: searchQuery ?? this.searchQuery,
+      categoryFilter: identical(categoryFilter, _unset)
+          ? this.categoryFilter
+          : categoryFilter as String?,
+      statusFilter: statusFilter ?? this.statusFilter,
+      sortBy: sortBy ?? this.sortBy,
+      errorMessage:
+          identical(errorMessage, _unset) ? this.errorMessage : errorMessage as String?,
+    );
+  }
+
+  static const Object _unset = Object();
 }
 
 class SubscriptionController extends StateNotifier<SubscriptionState> {
-  SubscriptionController() : super(const SubscriptionState()) {
-    _loadInitialSubscriptions();
+  SubscriptionController({
+    required SubscriptionRepository repository,
+    required String? userId,
+    required DateTime Function() clock,
+    required bool Function() shouldSeedDemo,
+    required Future<void> Function() markSeeded,
+  })  : _repository = repository,
+        _userId = userId,
+        _clock = clock,
+        _shouldSeedDemo = shouldSeedDemo,
+        _markSeeded = markSeeded,
+        super(const SubscriptionState()) {
+    if (_userId != null) {
+      load();
+    }
   }
 
-  void _loadInitialSubscriptions() {
-    final now = DateTime.now();
-    final demoSubscriptions = [
-      SubscriptionModel(
-        id: 'sub_1',
-        userId: 'usr_demo_1',
-        name: 'Netflix',
-        categoryId: 'cat_streaming',
-        price: 59.90,
-        billingCycle: 'mensal',
-        billingDay: 18,
-        nextBillingDate: DateTime(now.year, now.month, now.day + 1),
-        status: SubscriptionStatus.active,
-        paymentMethod: 'Cartão de Crédito',
-        notes: 'Plano Premium 4K',
-        usageLevel: UsageLevel.high,
-        createdAt: DateTime(2025, 1, 15),
-      ),
-      SubscriptionModel(
-        id: 'sub_2',
-        userId: 'usr_demo_1',
-        name: 'Spotify',
-        categoryId: 'cat_streaming',
-        price: 21.90,
-        billingCycle: 'mensal',
-        billingDay: 20,
-        nextBillingDate: DateTime(now.year, now.month, now.day + 3),
-        status: SubscriptionStatus.active,
-        paymentMethod: 'Cartão de Crédito',
-        notes: 'Plano Individual',
-        usageLevel: UsageLevel.high,
-        createdAt: DateTime(2024, 6, 10),
-      ),
-      SubscriptionModel(
-        id: 'sub_3',
-        userId: 'usr_demo_1',
-        name: 'Game Pass Ultimate',
-        categoryId: 'cat_games',
-        price: 119.90,
-        billingCycle: 'mensal',
-        billingDay: 23,
-        nextBillingDate: DateTime(now.year, now.month, now.day + 6),
-        status: SubscriptionStatus.active,
-        paymentMethod: 'Pix',
-        usageLevel: UsageLevel.medium,
-        createdAt: DateTime(2025, 3, 1),
-      ),
-      SubscriptionModel(
-        id: 'sub_4',
-        userId: 'usr_demo_1',
-        name: 'ChatGPT Plus',
-        categoryId: 'cat_ai',
-        price: 97.70,
-        billingCycle: 'mensal',
-        billingDay: 25,
-        nextBillingDate: DateTime(now.year, now.month, now.day + 8),
-        status: SubscriptionStatus.active,
-        paymentMethod: 'Cartão de Crédito',
-        usageLevel: UsageLevel.high,
-        createdAt: DateTime(2025, 2, 20),
-      ),
-      SubscriptionModel(
-        id: 'sub_5',
-        userId: 'usr_demo_1',
-        name: 'Disney+',
-        categoryId: 'cat_streaming',
-        price: 43.90,
-        billingCycle: 'mensal',
-        billingDay: 28,
-        nextBillingDate: DateTime(now.year, now.month, now.day + 11),
-        status: SubscriptionStatus.active,
-        paymentMethod: 'Cartão de Crédito',
-        usageLevel: UsageLevel.low, // Pouco utilizado para economia
-        createdAt: DateTime(2024, 11, 5),
-      ),
-      SubscriptionModel(
-        id: 'sub_6',
-        userId: 'usr_demo_1',
-        name: 'iCloud 200GB',
-        categoryId: 'cat_cloud',
-        price: 39.90,
-        billingCycle: 'mensal',
-        billingDay: 5,
-        nextBillingDate: DateTime(now.year, now.month + 1, 5),
-        status: SubscriptionStatus.active,
-        paymentMethod: 'Cartão de Crédito',
-        usageLevel: UsageLevel.high,
-        createdAt: DateTime(2023, 8, 12),
-      ),
+  final SubscriptionRepository _repository;
+  final String? _userId;
+  final DateTime Function() _clock;
+  final bool Function() _shouldSeedDemo;
+  final Future<void> Function() _markSeeded;
 
-      // 6 Assinaturas adicionais para somar as 12 ativas
-      SubscriptionModel(
-        id: 'sub_7',
-        userId: 'usr_demo_1',
-        name: 'Prime Video',
-        categoryId: 'cat_streaming',
-        price: 19.90,
-        billingCycle: 'mensal',
-        billingDay: 12,
-        nextBillingDate: DateTime(now.year, now.month + 1, 12),
-        status: SubscriptionStatus.active,
-        paymentMethod: 'Cartão de Crédito',
-        usageLevel: UsageLevel.medium,
-        createdAt: DateTime(2024, 2, 10),
-      ),
-      SubscriptionModel(
-        id: 'sub_8',
-        userId: 'usr_demo_1',
-        name: 'Canva Pro',
-        categoryId: 'cat_software',
-        price: 34.90,
-        billingCycle: 'mensal',
-        billingDay: 14,
-        nextBillingDate: DateTime(now.year, now.month + 1, 14),
-        status: SubscriptionStatus.active,
-        paymentMethod: 'Cartão de Crédito',
-        usageLevel: UsageLevel.low, // Pouco utilizado
-        createdAt: DateTime(2024, 9, 1),
-      ),
-      SubscriptionModel(
-        id: 'sub_9',
-        userId: 'usr_demo_1',
-        name: 'PlayStation Plus',
-        categoryId: 'cat_games',
-        price: 40.00, // R$ 480 anual = R$ 40/mês
-        billingCycle: 'anual',
-        billingDay: 15,
-        nextBillingDate: DateTime(now.year + 1, 2, 15),
-        status: SubscriptionStatus.active,
-        paymentMethod: 'Cartão de Crédito',
-        usageLevel: UsageLevel.medium,
-        createdAt: DateTime(2025, 2, 15),
-      ),
-      SubscriptionModel(
-        id: 'sub_10',
-        userId: 'usr_demo_1',
-        name: 'Jornal O Globo',
-        categoryId: 'cat_jornais',
-        price: 30.90,
-        billingCycle: 'mensal',
-        billingDay: 10,
-        nextBillingDate: DateTime(now.year, now.month + 1, 10),
-        status: SubscriptionStatus.active,
-        paymentMethod: 'Débito Automático',
-        usageLevel: UsageLevel.low, // Pouco utilizado
-        createdAt: DateTime(2024, 5, 20),
-      ),
-      SubscriptionModel(
-        id: 'sub_11',
-        userId: 'usr_demo_1',
-        name: 'GitHub Pro',
-        categoryId: 'cat_software',
-        price: 24.00,
-        billingCycle: 'mensal',
-        billingDay: 8,
-        nextBillingDate: DateTime(now.year, now.month + 1, 8),
-        status: SubscriptionStatus.active,
-        paymentMethod: 'Cartão de Crédito',
-        usageLevel: UsageLevel.high,
-        createdAt: DateTime(2024, 1, 1),
-      ),
-      SubscriptionModel(
-        id: 'sub_12',
-        userId: 'usr_demo_1',
-        name: 'Smart Fit Academia',
-        categoryId: 'cat_academias',
-        price: 119.90,
-        billingCycle: 'mensal',
-        billingDay: 1,
-        nextBillingDate: DateTime(now.year, now.month + 1, 1),
-        status: SubscriptionStatus.active,
-        paymentMethod: 'Cartão de Crédito',
-        usageLevel: UsageLevel.high,
-        createdAt: DateTime(2025, 1, 5),
-      ),
-    ];
+  Future<void> load() async {
+    final userId = _userId;
+    if (userId == null) return;
 
-    state = state.copyWith(subscriptions: demoSubscriptions);
+    state = state.copyWith(status: LoadStatus.loading, errorMessage: null);
+    final result = await _repository.loadAll(userId);
+    if (!mounted) return;
+
+    await result.fold(
+      onOk: (loaded) async {
+        var subscriptions = loaded;
+
+        // Semeia a carteira de exemplo **apenas** na conta de demonstração, e uma
+        // vez só. Uma conta criada de verdade pelo usuário começa vazia.
+        if (subscriptions.isEmpty && _shouldSeedDemo()) {
+          subscriptions = DemoSubscriptions.build(userId: userId, now: _clock());
+          await _repository.saveAll(userId, subscriptions);
+          await _markSeeded();
+        }
+
+        // Datas no passado são roladas para a próxima ocorrência real.
+        final now = _clock();
+        final rolled = subscriptions
+            .map((s) => s.rolledForward(now: now))
+            .toList(growable: false);
+
+        final changed = _hasDateChanges(subscriptions, rolled);
+        if (changed) await _repository.saveAll(userId, rolled);
+
+        if (!mounted) return;
+        state = state.copyWith(subscriptions: rolled, status: LoadStatus.ready);
+      },
+      onErr: (error) async {
+        if (!mounted) return;
+        state = state.copyWith(status: LoadStatus.error, errorMessage: error.message);
+      },
+    );
   }
 
-  void setSearchQuery(String query) {
-    state = state.copyWith(searchQuery: query);
+  // --- Filtros (apenas estado de UI, não persistem) ---
+
+  void setSearchQuery(String query) => state = state.copyWith(searchQuery: query);
+
+  void setCategoryFilter(String? categoryId) =>
+      state = state.copyWith(categoryFilter: categoryId);
+
+  void setStatusFilter(StatusFilter filter) =>
+      state = state.copyWith(statusFilter: filter);
+
+  void setSortBy(SubscriptionSort sort) => state = state.copyWith(sortBy: sort);
+
+  void clearFilters() => state = state.copyWith(
+        searchQuery: '',
+        categoryFilter: null,
+        statusFilter: StatusFilter.all,
+      );
+
+  // --- Mutações ---
+
+  /// Adiciona uma assinatura, respeitando o limite do plano.
+  ///
+  /// A checagem fica aqui, e não na tela, para que nenhum caminho de UI consiga
+  /// furar o limite (o modal de cadastro não é a única porta — há a ação rápida do
+  /// dashboard e, no futuro, importação).
+  Future<AppException?> addSubscription(
+    SubscriptionModel subscription, {
+    required Entitlements entitlements,
+  }) async {
+    final activeCount = state.activeCount;
+    if (!entitlements.canAddSubscription(activeCount, now: _clock())) {
+      return EntitlementException.subscriptionLimit(FreePlanLimits.maxSubscriptions);
+    }
+    return _persist(<SubscriptionModel>[...state.subscriptions, subscription]);
   }
 
-  void setCategoryFilter(String? categoryId) {
-    state = state.copyWith(selectedCategoryFilter: categoryId);
+  Future<AppException?> updateSubscription(SubscriptionModel updated) {
+    final next = state.subscriptions.map((s) {
+      if (s.id != updated.id) return s;
+      // Mudança de preço entra no histórico, que alimenta o alerta de reajuste.
+      return s.price == updated.price
+          ? updated
+          : updated.copyWith(
+              priceHistory: <PricePoint>[
+                ...s.priceHistory,
+                PricePoint(price: s.price, changedAt: _clock()),
+              ],
+            );
+    }).toList(growable: false);
+
+    return _persist(next);
   }
 
-  void setStatusFilter(String status) {
-    state = state.copyWith(statusFilter: status);
+  Future<AppException?> setStatus(String id, SubscriptionStatus status) {
+    final next = state.subscriptions
+        .map((s) => s.id == id ? s.copyWith(status: status) : s)
+        .toList(growable: false);
+    return _persist(next);
   }
 
-  void setSortBy(String sort) {
-    state = state.copyWith(sortBy: sort);
+  Future<AppException?> deleteSubscription(String id) {
+    final next = state.subscriptions.where((s) => s.id != id).toList(growable: false);
+    return _persist(next);
   }
 
-  void addSubscription(SubscriptionModel subscription) {
-    final updated = [...state.subscriptions, subscription];
-    state = state.copyWith(subscriptions: updated);
+  Future<AppException?> setUsageLevel(String id, UsageLevel level) {
+    final next = state.subscriptions
+        .map((s) => s.id == id ? s.copyWith(usageLevel: level) : s)
+        .toList(growable: false);
+    return _persist(next);
   }
 
-  void updateSubscription(SubscriptionModel updatedSubscription) {
-    final updated =
-        state.subscriptions.map((s) {
-          return s.id == updatedSubscription.id ? updatedSubscription : s;
-        }).toList();
-    state = state.copyWith(subscriptions: updated);
+  /// Cancela em lote — usado pela ação "revisar agora" dos insights.
+  Future<AppException?> cancelMany(List<String> ids) {
+    final target = ids.toSet();
+    final next = state.subscriptions
+        .map(
+          (s) => target.contains(s.id)
+              ? s.copyWith(status: SubscriptionStatus.cancelled)
+              : s,
+        )
+        .toList(growable: false);
+    return _persist(next);
   }
 
-  void toggleStatus(String id, SubscriptionStatus newStatus) {
-    final updated =
-        state.subscriptions.map((s) {
-          if (s.id == id) {
-            return s.copyWith(status: newStatus);
-          }
-          return s;
-        }).toList();
-    state = state.copyWith(subscriptions: updated);
+  /// Grava e só então atualiza o estado.
+  ///
+  /// A ordem importa: atualizar o estado antes de gravar produziria uma UI que
+  /// mostra a assinatura cadastrada e a perde no próximo boot, caso o disco falhe.
+  Future<AppException?> _persist(List<SubscriptionModel> subscriptions) async {
+    final userId = _userId;
+    if (userId == null) return const UnexpectedException();
+
+    final result = await _repository.saveAll(userId, subscriptions);
+    if (!mounted) return null;
+
+    return result.fold(
+      onOk: (_) {
+        state = state.copyWith(subscriptions: subscriptions, status: LoadStatus.ready);
+        return null;
+      },
+      onErr: (error) {
+        state = state.copyWith(errorMessage: error.message);
+        return error;
+      },
+    );
   }
 
-  void deleteSubscription(String id) {
-    final updated = state.subscriptions.where((s) => s.id != id).toList();
-    state = state.copyWith(subscriptions: updated);
+  static bool _hasDateChanges(
+    List<SubscriptionModel> before,
+    List<SubscriptionModel> after,
+  ) {
+    if (before.length != after.length) return true;
+    for (var i = 0; i < before.length; i++) {
+      if (before[i].nextBillingDate != after[i].nextBillingDate) return true;
+    }
+    return false;
   }
 }
 
+final subscriptionRepositoryProvider = Provider<SubscriptionRepository>((ref) {
+  return LocalSubscriptionRepository(store: ref.watch(keyValueStoreProvider));
+});
+
 final subscriptionControllerProvider =
     StateNotifierProvider<SubscriptionController, SubscriptionState>((ref) {
-      return SubscriptionController();
-    });
+  final store = ref.watch(keyValueStoreProvider);
+  final user = ref.watch(currentUserProvider);
+  final userId = user?.id;
+  final isDemoAccount = user?.normalizedEmail == AppConstants.demoEmail;
+
+  return SubscriptionController(
+    repository: ref.watch(subscriptionRepositoryProvider),
+    userId: userId,
+    clock: ref.watch(clockProvider),
+    shouldSeedDemo: () =>
+        userId != null &&
+        isDemoAccount &&
+        store.getBool(StorageKeys.demoSeeded(userId)) != true,
+    markSeeded: () => userId == null
+        ? Future<void>.value()
+        : store.setBool(StorageKeys.demoSeeded(userId), value: true),
+  );
+});
+
+/// Assinaturas ativas. Atalho para o motor de insights e para o calendário.
+final activeSubscriptionsProvider = Provider<List<SubscriptionModel>>((ref) {
+  return ref.watch(subscriptionControllerProvider).activeSubscriptions;
+});
