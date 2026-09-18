@@ -74,11 +74,30 @@ void main() {
     });
 
     test('aceita ponto como separador decimal (teclado iOS)', () {
+      // Regressão: a normalização removia todo ponto antes de tratar a vírgula,
+      // então "59.90" virava 5990,00 — cem vezes o valor real.
       expect(Validators.parsePrice('59.90'), closeTo(59.90, 0.001));
+      expect(Validators.parsePrice('9.9'), closeTo(9.9, 0.001));
+      expect(Validators.parsePrice('1234.56'), closeTo(1234.56, 0.001));
     });
 
     test('aceita separador de milhar', () {
       expect(Validators.parsePrice('1.234,56'), closeTo(1234.56, 0.001));
+      expect(Validators.parsePrice('12.345,678'), closeTo(12345.678, 0.001));
+    });
+
+    test('trata ponto seguido de três dígitos como milhar', () {
+      // "1.234" é mil duzentos e trinta e quatro, não um e vinte e três.
+      expect(Validators.parsePrice('1.234'), closeTo(1234, 0.001));
+      expect(Validators.parsePrice('1.234.567'), closeTo(1234567, 0.001));
+    });
+
+    test('ponto de milhar combinado com decimal', () {
+      expect(Validators.parsePrice('1.234.56'), closeTo(1234.56, 0.001));
+    });
+
+    test('inteiro sem separador nenhum', () {
+      expect(Validators.parsePrice('120'), closeTo(120, 0.001));
     });
 
     test('ignora símbolo de moeda e espaços', () {

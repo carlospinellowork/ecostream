@@ -85,16 +85,22 @@ class CustomButton extends StatelessWidget {
       );
     }
 
-    if (icon == null) return Text(text);
+    final content = icon == null
+        ? Text(text, textAlign: TextAlign.center)
+        : Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              Icon(icon, size: 20),
+              const SizedBox(width: 8),
+              Text(text),
+            ],
+          );
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: <Widget>[
-        Icon(icon, size: 20),
-        const SizedBox(width: 8),
-        Text(text),
-      ],
-    );
+    // Rótulo longo — ou fonte ampliada nas configurações de acessibilidade —
+    // estourava a linha do botão em vez de se ajustar. `scaleDown` reduz a escala
+    // e preserva o texto inteiro, melhor do que cortar um valor em reais com
+    // reticências ("Assinar anual — R$ 95,90").
+    return FittedBox(fit: BoxFit.scaleDown, child: content);
   }
 }

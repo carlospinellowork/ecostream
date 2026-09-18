@@ -87,14 +87,35 @@ class Validators {
   }
 
   /// Converte texto digitado em `double`, ou `null` se não for um número.
+  ///
+  /// O ponto é ambíguo no Brasil: em "1.234" é separador de milhar, em "59.90"
+  /// (o que o teclado numérico do iOS entrega) é decimal. A versão anterior
+  /// removia todo ponto antes de trocar a vírgula, então "59.90" virava **5990,00**
+  /// — quem digitasse no iPhone cadastraria uma assinatura cem vezes mais cara.
+  ///
+  /// Regra adotada:
+  /// - se há vírgula, ela é o separador decimal e os pontos são de milhar;
+  /// - se só há pontos, o último conta como decimal quando sobram 1 ou 2 dígitos
+  ///   depois dele, e como milhar quando sobram 3.
   static double? parsePrice(String value) {
-    final normalized = value
-        .trim()
-        .replaceAll(RegExp(r'[R$\s]'), '')
-        .replaceAll('.', '')
-        .replaceAll(',', '.');
-    if (normalized.isEmpty) return null;
-    return double.tryParse(normalized);
+    // Remove símbolo de moeda, espaços e qualquer outro ruído de digitação.
+    final cleaned = value.trim().replaceAll(RegExp(r'[^\d.,-]'), '');
+    if (cleaned.isEmpty) return null;
+
+    if (cleaned.contains(',')) {
+      return double.tryParse(cleaned.replaceAll('.', '').replaceAll(',', '.'));
+    }
+
+    final lastDot = cleaned.lastIndexOf('.');
+    if (lastDot == -1) return double.tryParse(cleaned);
+
+    final decimalDigits = cleaned.length - lastDot - 1;
+    if (decimalDigits == 1 || decimalDigits == 2) {
+      final intPart = cleaned.substring(0, lastDot).replaceAll('.', '');
+      return double.tryParse('$intPart.${cleaned.substring(lastDot + 1)}');
+    }
+
+    return double.tryParse(cleaned.replaceAll('.', ''));
   }
 }
 

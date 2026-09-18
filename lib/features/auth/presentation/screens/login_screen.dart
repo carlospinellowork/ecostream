@@ -154,8 +154,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       ),
                       const SizedBox(height: 28),
 
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                      // Wrap, e não Row: com fonte ampliada por acessibilidade o
+                      // texto mais o botão não cabem em uma linha e estouravam a
+                      // largura. Aqui o botão desce para a linha seguinte.
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: <Widget>[
                           Text('Ainda não tem conta?', style: theme.textTheme.bodyMedium),
                           TextButton(
