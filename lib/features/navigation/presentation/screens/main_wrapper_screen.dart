@@ -1,68 +1,101 @@
 import 'package:flutter/material.dart';
-import 'package:ecostream/features/calendar/presentation/screens/calendar_screen.dart';
-import 'package:ecostream/features/dashboard/presentation/screens/dashboard_screen.dart';
-import 'package:ecostream/features/insights/presentation/screens/insights_screen.dart';
-import 'package:ecostream/features/profile/presentation/screens/profile_screen.dart';
-import 'package:ecostream/features/subscriptions/presentation/screens/subscriptions_screen.dart';
+import 'package:go_router/go_router.dart';
 
-class MainWrapperScreen extends StatefulWidget {
-  const MainWrapperScreen({super.key});
+import '../../../../core/router/app_routes.dart';
 
-  @override
-  State<MainWrapperScreen> createState() => _MainWrapperScreenState();
-}
+/// Casca com a barra de navegação inferior.
+///
+/// Recebe o [child] do `ShellRoute`: cada aba é uma rota real, então deep link,
+/// botão "voltar" do Android e restauração de estado funcionam. A versão anterior
+/// usava `IndexedStack` com índice em `setState`, invisível para o router — o que
+/// também quebrava `context.go('/calendar')` vindo do dashboard.
+class MainWrapperScreen extends StatelessWidget {
+  const MainWrapperScreen({required this.child, super.key});
 
-class _MainWrapperScreenState extends State<MainWrapperScreen> {
-  int _currentIndex = 0;
+  final Widget child;
 
-  final List<Widget> _screens = [
-    const DashboardScreen(),
-    const SubscriptionsScreen(),
-    const CalendarScreen(),
-    const InsightsScreen(),
-    const ProfileScreen(),
+  static const List<_NavItem> _items = <_NavItem>[
+    _NavItem(
+      route: AppRoutes.dashboard,
+      label: 'Início',
+      icon: Icons.home_outlined,
+      selectedIcon: Icons.home_rounded,
+    ),
+    _NavItem(
+      route: AppRoutes.subscriptions,
+      label: 'Assinaturas',
+      icon: Icons.subscriptions_outlined,
+      selectedIcon: Icons.subscriptions_rounded,
+    ),
+    _NavItem(
+      route: AppRoutes.calendar,
+      label: 'Calendário',
+      icon: Icons.calendar_month_outlined,
+      selectedIcon: Icons.calendar_month_rounded,
+    ),
+    _NavItem(
+      route: AppRoutes.insights,
+      label: 'Insights',
+      icon: Icons.lightbulb_outline,
+      selectedIcon: Icons.lightbulb_rounded,
+    ),
+    _NavItem(
+      route: AppRoutes.profile,
+      label: 'Perfil',
+      icon: Icons.person_outline,
+      selectedIcon: Icons.person_rounded,
+    ),
   ];
+
+  /// Índice da aba correspondente à rota atual.
+  ///
+  /// Usa `startsWith` para que sub-rotas futuras (ex.: `/assinaturas/detalhe`)
+  /// mantenham a aba certa destacada.
+  static int _indexForLocation(String location) {
+    for (var i = 0; i < _items.length; i++) {
+      if (location.startsWith(_items[i].route)) return i;
+    }
+    return 0;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final location = GoRouterState.of(context).uri.path;
+    final currentIndex = _indexForLocation(location);
+
     return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
-      ),
+      body: child,
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
+        selectedIndex: currentIndex,
         onDestinationSelected: (index) {
-          setState(() => _currentIndex = index);
+          if (index == currentIndex) return;
+          context.go(_items[index].route);
         },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home, color: Colors.teal),
-            label: 'Início',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.subscriptions_outlined),
-            selectedIcon: Icon(Icons.subscriptions, color: Colors.teal),
-            label: 'Assinaturas',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.calendar_month_outlined),
-            selectedIcon: Icon(Icons.calendar_month, color: Colors.teal),
-            label: 'Calendário',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.lightbulb_outlined),
-            selectedIcon: Icon(Icons.lightbulb, color: Colors.teal),
-            label: 'Insights',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person, color: Colors.teal),
-            label: 'Perfil',
-          ),
-        ],
+        destinations: _items
+            .map(
+              (item) => NavigationDestination(
+                icon: Icon(item.icon),
+                selectedIcon: Icon(item.selectedIcon),
+                label: item.label,
+                tooltip: item.label,
+              ),
+            )
+            .toList(growable: false),
       ),
     );
   }
+}
+
+class _NavItem {
+  const _NavItem({
+    required this.route,
+    required this.label,
+    required this.icon,
+    required this.selectedIcon,
+  });
+
+  final String route;
+  final String label;
+  final IconData icon;
+  final IconData selectedIcon;
 }

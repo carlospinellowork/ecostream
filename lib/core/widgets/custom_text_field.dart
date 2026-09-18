@@ -1,43 +1,72 @@
 import 'package:flutter/material.dart';
-import '../constants/app_colors.dart';
+import 'package:flutter/services.dart';
 
+/// Campo de texto com rótulo externo.
+///
+/// O estilo vem do `inputDecorationTheme`; este widget só compõe rótulo, dica de
+/// ajuda e o campo. Antes cada instância redefinia todas as bordas na mão, o que
+/// fazia os campos divergirem entre telas.
 class CustomTextField extends StatelessWidget {
-  final String label;
-  final String? hint;
-  final TextEditingController? controller;
-  final bool obscureText;
-  final TextInputType keyboardType;
-  final IconData? prefixIcon;
-  final Widget? suffixIcon;
-  final String? Function(String?)? validator;
-  final ValueChanged<String>? onChanged;
-
   const CustomTextField({
-    super.key,
     required this.label,
+    super.key,
     this.hint,
+    this.helperText,
     this.controller,
     this.obscureText = false,
     this.keyboardType = TextInputType.text,
+    this.textInputAction,
     this.prefixIcon,
     this.suffixIcon,
     this.validator,
     this.onChanged,
+    this.onFieldSubmitted,
+    this.inputFormatters,
+    this.autofillHints,
+    this.enabled = true,
+    this.maxLines = 1,
+    this.autofocus = false,
+    this.textCapitalization = TextCapitalization.none,
   });
+
+  final String label;
+  final String? hint;
+
+  /// Texto de apoio abaixo do campo, para explicar a regra antes do erro aparecer.
+  final String? helperText;
+
+  final TextEditingController? controller;
+  final bool obscureText;
+  final TextInputType keyboardType;
+  final TextInputAction? textInputAction;
+  final IconData? prefixIcon;
+  final Widget? suffixIcon;
+  final String? Function(String?)? validator;
+  final ValueChanged<String>? onChanged;
+  final ValueChanged<String>? onFieldSubmitted;
+  final List<TextInputFormatter>? inputFormatters;
+
+  /// Dicas de autofill. Preencher isso é o que faz o gerenciador de senhas do
+  /// sistema oferecer e salvar credenciais — sem elas, o login fica hostil.
+  final List<String>? autofillHints;
+
+  final bool enabled;
+  final int maxLines;
+  final bool autofocus;
+  final TextCapitalization textCapitalization;
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
+      children: <Widget>[
         Text(
           label,
-          style: TextStyle(
+          style: theme.textTheme.labelLarge?.copyWith(
             fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+            color: theme.colorScheme.onSurface,
           ),
         ),
         const SizedBox(height: 6),
@@ -45,46 +74,25 @@ class CustomTextField extends StatelessWidget {
           controller: controller,
           obscureText: obscureText,
           keyboardType: keyboardType,
+          textInputAction: textInputAction,
           validator: validator,
           onChanged: onChanged,
-          style: TextStyle(
-            color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
-          ),
+          onFieldSubmitted: onFieldSubmitted,
+          inputFormatters: inputFormatters,
+          autofillHints: autofillHints,
+          enabled: enabled,
+          maxLines: obscureText ? 1 : maxLines,
+          autofocus: autofocus,
+          textCapitalization: textCapitalization,
+          style: TextStyle(color: theme.colorScheme.onSurface, fontSize: 15),
           decoration: InputDecoration(
             hintText: hint,
-            hintStyle: TextStyle(
-              color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
-              fontSize: 14,
-            ),
-            prefixIcon: prefixIcon != null
-                ? Icon(
-                    prefixIcon,
-                    color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
-                    size: 20,
-                  )
-                : null,
+            helperText: helperText,
+            helperMaxLines: 2,
+            prefixIcon: prefixIcon == null
+                ? null
+                : Icon(prefixIcon, size: 20, color: theme.colorScheme.onSurfaceVariant),
             suffixIcon: suffixIcon,
-            filled: true,
-            fillColor: isDark ? const Color(0xFF1E293B) : Colors.white,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(
-                color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1),
-              ),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: AppColors.primary, width: 2),
-            ),
-            errorBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: AppColors.error, width: 1),
-            ),
-            focusedErrorBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: AppColors.error, width: 2),
-            ),
           ),
         ),
       ],
