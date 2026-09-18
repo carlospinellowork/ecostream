@@ -40,8 +40,8 @@ class SectionHeader extends StatelessWidget {
             ),
             child: Text(actionLabel!),
           )
-        else if (trailing != null)
-          trailing!,
+        else
+          ?trailing,
       ],
     );
   }

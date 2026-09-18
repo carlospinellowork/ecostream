@@ -196,7 +196,7 @@ class _SubscriptionsScreenState extends ConsumerState<SubscriptionsScreen> {
               LoadStatus.ready => ListView.separated(
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
                   itemCount: filtered.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  separatorBuilder: (_, _) => const SizedBox(height: 10),
                   itemBuilder: (context, index) {
                     final sub = filtered[index];
                     return _SubscriptionTile(

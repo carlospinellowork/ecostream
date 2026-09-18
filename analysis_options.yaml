@@ -58,13 +58,17 @@ linter:
     prefer_final_in_for_each: true
     directives_ordering: true
     sort_child_properties_last: true
-    unnecessary_await_in_return: true
     unnecessary_parenthesis: true
     unnecessary_to_list_in_spreads: true
     use_named_constants: true
     use_string_buffers: true
 
     # --- Imutabilidade / API ---
+    # prefer_initializing_formals fica desligada: ela sugere `this._campo` para
+    # construtores que atribuem um parametro nomeado a um campo privado, mas
+    # parametro nomeado nao pode comecar com underscore em Dart. A sugestao e
+    # inaplicavel nos repositorios e controllers deste projeto.
+    prefer_initializing_formals: false
     avoid_field_initializers_in_const_classes: true
     prefer_const_declarations: true
     use_setters_to_change_properties: true

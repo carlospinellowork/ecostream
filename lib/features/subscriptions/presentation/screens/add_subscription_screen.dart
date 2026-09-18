@@ -297,7 +297,7 @@ class _AddSubscriptionScreenState extends ConsumerState<AddSubscriptionScreen> {
               const SectionHeader(title: 'Forma de pagamento'),
               const SizedBox(height: 10),
               DropdownButtonFormField<String>(
-                value: _paymentMethod,
+                initialValue: _paymentMethod,
                 items: AppConstants.paymentMethods
                     .map(
                       (method) => DropdownMenuItem<String>(

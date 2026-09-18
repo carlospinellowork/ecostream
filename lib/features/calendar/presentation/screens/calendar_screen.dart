@@ -210,7 +210,7 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
                 : ListView.separated(
                     padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
                     itemCount: selectedEvents.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
                     itemBuilder: (context, index) {
                       final sub = selectedEvents[index];
                       final category = CategoryModel.byId(sub.categoryId);
