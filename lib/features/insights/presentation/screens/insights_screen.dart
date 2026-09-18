@@ -1,255 +1,368 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/constants/app_colors.dart';
-import '../../../../core/utils/currency_formatter.dart';
-import '../../../../core/widgets/custom_card.dart';
-import 'package:ecostream/features/categories/domain/category_model.dart';
-import 'package:ecostream/features/subscriptions/domain/subscription_model.dart';
-import 'package:ecostream/features/subscriptions/presentation/controllers/subscription_controller.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../../core/constants/app_colors.dart';
+import '../../../../core/router/app_routes.dart';
+import '../../../../core/utils/currency_formatter.dart';
+import '../../../../core/widgets/app_empty_state.dart';
+import '../../../../core/widgets/app_snack_bar.dart';
+import '../../../../core/widgets/custom_card.dart';
+import '../../../../core/widgets/pro_badge.dart';
+import '../../../../core/widgets/section_header.dart';
+import '../../../billing/presentation/controllers/entitlement_controller.dart';
+import '../../../subscriptions/presentation/controllers/subscription_controller.dart';
+import '../../domain/insight.dart';
+import '../controllers/insights_controller.dart';
+
+/// Tela de insights e economia.
+///
+/// Todos os insights aparecem, inclusive os do Pro — estes com o detalhe borrado e o
+/// **valor em reais visível**. Esconder a conclusão inteira tira o motivo de assinar
+/// (CLAUDE.md §8).
 class InsightsScreen extends ConsumerWidget {
   const InsightsScreen({super.key});
 
+  Future<void> _applyCancellation(
+    BuildContext context,
+    WidgetRef ref,
+    Insight insight,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Marcar como cancelada?'),
+        content: Text(
+          insight.subscriptionIds.length == 1
+              ? 'A assinatura será marcada como cancelada no EcoStream. '
+                  'Lembre-se de cancelar também no site do serviço.'
+              : '${insight.subscriptionIds.length} assinaturas serão marcadas como '
+                  'canceladas no EcoStream. Lembre-se de cancelar também nos sites '
+                  'dos serviços.',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Voltar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Marcar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !context.mounted) return;
+
+    final error = await ref
+        .read(subscriptionControllerProvider.notifier)
+        .cancelMany(insight.subscriptionIds);
+
+    if (!context.mounted) return;
+    if (error != null) {
+      AppSnackBar.showError(context, error.message);
+      return;
+    }
+    AppSnackBar.showSuccess(context, 'Pronto. Seu gasto mensal foi recalculado.');
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final subState = ref.watch(subscriptionControllerProvider);
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
+    final insights = ref.watch(insightsProvider);
+    final savings = ref.watch(potentialAnnualSavingsProvider);
+    final entitlements = ref.watch(entitlementsProvider);
+    final subState = ref.watch(subscriptionControllerProvider);
 
-    final activeSubs = subState.subscriptions.where((s) => s.status == SubscriptionStatus.active).toList();
-
-    // 1. Regra Determinística: Serviços Pouco Utilizados
-    final lowUsageSubs = activeSubs.where((s) => s.usageLevel == UsageLevel.low).toList();
-    final potentialSavingsMonthly = lowUsageSubs.fold(0.0, (sum, s) => sum + s.monthlyEquivalent);
-    final potentialSavingsAnnual = potentialSavingsMonthly * 12.0;
-
-    // 2. Regra Determinística: Categoria Maior Gasto
-    final Map<String, double> categorySpendMap = {};
-    for (var sub in activeSubs) {
-      categorySpendMap[sub.categoryId] = (categorySpendMap[sub.categoryId] ?? 0.0) + sub.monthlyEquivalent;
+    if (subState.status == LoadStatus.loading || subState.status == LoadStatus.initial) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Insights & Economia')),
+        body: const Center(child: CircularProgressIndicator()),
+      );
     }
 
-    String topCategoryName = 'Nenhuma';
-    double topCategorySpend = 0.0;
-    double topCategoryPercent = 0.0;
+    if (insights.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Insights & Economia')),
+        body: AppEmptyState(
+          icon: Icons.lightbulb_outline,
+          title: 'Nada a analisar ainda',
+          message: 'Cadastre suas assinaturas e informe com que frequência usa cada '
+              'uma. A partir daí apontamos onde está sobrando dinheiro.',
+          actionLabel: 'Cadastrar assinatura',
+          onAction: () => context.push(AppRoutes.addSubscription),
+        ),
+      );
+    }
 
-    categorySpendMap.forEach((catId, spend) {
-      if (spend > topCategorySpend) {
-        topCategorySpend = spend;
-        final cat = CategoryModel.defaultCategories.firstWhere((c) => c.id == catId, orElse: () => CategoryModel.defaultCategories.last);
-        topCategoryName = cat.name;
-        topCategoryPercent = subState.totalMonthlySpend > 0 ? (spend / subState.totalMonthlySpend) * 100 : 0.0;
-      }
-    });
-
-    // 3. Regra Determinística: Gastos com IA
-    final aiSpend = categorySpendMap['cat_ai'] ?? 0.0;
+    final lockedSavings = insights
+        .where((i) => i.isLocked && i.isActionable)
+        .fold<double>(0, (sum, i) => sum + i.potentialAnnualSavings);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Insights & Economia'),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Banner de Oportunidades de Economia
-            CustomCard(
-              backgroundColor: isDark ? const Color(0xFF1E293B) : const Color(0xFFFEF3C7),
-              border: Border.all(color: AppColors.warning.withOpacity(0.4)),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.lightbulb_outlined, color: AppColors.warning, size: 28),
-                      const SizedBox(width: 10),
-                      Text(
-                        'Oportunidade de Economia',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: isDark ? Colors.white : const Color(0xFF92400E),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Você poderia economizar ${CurrencyFormatter.formatBRL(potentialSavingsMonthly)} / mês',
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.warning,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Economia anual estimada em ${CurrencyFormatter.formatBRL(potentialSavingsAnnual)} cancelando serviços de baixo uso.',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: isDark ? AppColors.textSecondaryDark : const Color(0xFF78350F),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
+      appBar: AppBar(title: const Text('Insights & Economia')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+        children: <Widget>[
+          _SavingsHeadline(annualSavings: savings),
 
-            Text(
-              'Análises Inteligentes',
-              style: theme.textTheme.titleLarge?.copyWith(fontSize: 18),
-            ),
-            const SizedBox(height: 12),
-
-            // Card 1: Resumo Geral
-            _InsightItemCard(
-              icon: Icons.account_balance_wallet_outlined,
-              iconColor: AppColors.primary,
-              title: 'Total de Compromissos Reais',
-              description: 'Seu gasto mensal recorrente atual é de ${CurrencyFormatter.formatBRL(subState.totalMonthlySpend)} em ${subState.activeCount} assinaturas ativas.',
-            ),
-            const SizedBox(height: 12),
-
-            // Card 2: Maior Categoria de Gastos
-            if (topCategorySpend > 0) ...[
-              _InsightItemCard(
-                icon: Icons.pie_chart_outline,
-                iconColor: AppColors.secondary,
-                title: 'Concentração de Gastos',
-                description: '$topCategoryName representa ${topCategoryPercent.toStringAsFixed(0)}% das suas assinaturas (${CurrencyFormatter.formatBRL(topCategorySpend)}/mês).',
-              ),
-              const SizedBox(height: 12),
-            ],
-
-            // Card 3: Gastos com Ferramentas de IA
-            if (aiSpend > 0) ...[
-              _InsightItemCard(
-                icon: Icons.psychology_outlined,
-                iconColor: AppColors.catAI,
-                title: 'Investimento em Inteligência Artificial',
-                description: 'Você investe ${CurrencyFormatter.formatBRL(aiSpend)} por mês em ferramentas e assistentes de IA.',
-              ),
-              const SizedBox(height: 12),
-            ],
-
-            // Card 4: Serviços com uso Baixo
-            _InsightItemCard(
-              icon: Icons.warning_amber_rounded,
-              iconColor: AppColors.error,
-              title: '${lowUsageSubs.length} Serviços com Baixa Utilização',
-              description: 'Identificamos que serviços como ${lowUsageSubs.map((e) => e.name).join(', ')} possuem baixo uso recente.',
-            ),
-
-            const SizedBox(height: 28),
-
-            Text(
-              'Recomendações de Ação',
-              style: theme.textTheme.titleLarge?.copyWith(fontSize: 18),
-            ),
-            const SizedBox(height: 12),
-
-            ...lowUsageSubs.map((sub) {
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12.0),
-                child: CustomCard(
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            sub.name,
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            'Gasto: ${CurrencyFormatter.formatBRL(sub.price)}/${sub.billingCycle}',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
-                            ),
-                          ),
-                        ],
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: AppColors.error.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          'Pausar/Cancelar',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.error,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
+          if (lockedSavings > 0) ...<Widget>[
+            const SizedBox(height: 14),
+            _UnlockPrompt(lockedSavings: lockedSavings),
           ],
-        ),
+
+          const SizedBox(height: 24),
+          const SectionHeader(title: 'O que encontramos'),
+          const SizedBox(height: 12),
+
+          ...insights.map((insight) {
+            final unlocked = insight.requiredFeature == null ||
+                entitlements.can(insight.requiredFeature!);
+
+            final card = _InsightCard(
+              insight: insight,
+              onAction: insight.kind == InsightKind.wastedSpend && unlocked
+                  ? () => _applyCancellation(context, ref, insight)
+                  : null,
+            );
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: unlocked
+                  ? card
+                  : ProLockedOverlay(
+                      headline: insight.isActionable
+                          ? '${CurrencyFormatter.format(insight.potentialAnnualSavings)} '
+                              'por ano'
+                          : null,
+                      onUnlock: () =>
+                          context.push('${AppRoutes.paywall}?origem=insight-${insight.id}'),
+                      child: card,
+                    ),
+            );
+          }),
+
+          const SizedBox(height: 8),
+          Text(
+            'As sugestões usam o nível de uso que você informou em cada assinatura. '
+            'Mantenha-o atualizado para recomendações mais precisas.',
+            style: theme.textTheme.bodySmall?.copyWith(fontSize: 12),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _InsightItemCard extends StatelessWidget {
-  final IconData icon;
-  final Color iconColor;
-  final String title;
-  final String description;
+class _SavingsHeadline extends StatelessWidget {
+  const _SavingsHeadline({required this.annualSavings});
 
-  const _InsightItemCard({
-    required this.icon,
-    required this.iconColor,
-    required this.title,
-    required this.description,
-  });
+  final double annualSavings;
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final hasSavings = annualSavings > 0;
 
     return CustomCard(
-      child: Row(
+      elevated: true,
+      backgroundColor: hasSavings
+          ? AppColors.warning.withValues(alpha: 0.10)
+          : AppColors.success.withValues(alpha: 0.10),
+      borderColor: (hasSavings ? AppColors.warning : AppColors.success)
+          .withValues(alpha: 0.35),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: iconColor.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: iconColor, size: 24),
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Icon(
+                hasSavings ? Icons.savings_outlined : Icons.verified_outlined,
+                color: hasSavings ? AppColors.warning : AppColors.success,
+                size: 26,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  hasSavings ? 'Economia disponível' : 'Carteira enxuta',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontSize: 15,
+                    color: theme.colorScheme.onSurface,
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 14),
+          const SizedBox(height: 12),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              hasSavings
+                  ? '${CurrencyFormatter.format(annualSavings)} por ano'
+                  : 'Nada a cortar por aqui',
+              style: theme.textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w900,
+                letterSpacing: -0.8,
+                color: hasSavings ? AppColors.warning : AppColors.success,
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            hasSavings
+                ? 'Somando tudo que identificamos de gasto evitável nas suas '
+                    'assinaturas ativas.'
+                : 'Não encontramos desperdício óbvio nas suas assinaturas ativas. '
+                    'Continue registrando o uso para novas análises.',
+            style: theme.textTheme.bodyMedium,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UnlockPrompt extends StatelessWidget {
+  const _UnlockPrompt({required this.lockedSavings});
+
+  final double lockedSavings;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return CustomCard(
+      onTap: () => context.push('${AppRoutes.paywall}?origem=insights-bloqueados'),
+      backgroundColor: AppColors.pro.withValues(alpha: 0.08),
+      borderColor: AppColors.pro.withValues(alpha: 0.3),
+      child: Row(
+        children: <Widget>[
+          const Icon(Icons.lock_outline, color: AppColors.pro, size: 22),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+              children: <Widget>[
                 Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  description,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                  '${CurrencyFormatter.format(lockedSavings)} por ano em análises '
+                  'bloqueadas',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontSize: 14,
+                    color: theme.colorScheme.onSurface,
                   ),
                 ),
+                const SizedBox(height: 2),
+                Text('Toque para ver o que o Pro mostra', style: theme.textTheme.bodySmall),
               ],
             ),
           ),
+          const Icon(Icons.chevron_right, color: AppColors.pro),
+        ],
+      ),
+    );
+  }
+}
+
+class _InsightCard extends StatelessWidget {
+  const _InsightCard({required this.insight, this.onAction});
+
+  final Insight insight;
+  final VoidCallback? onAction;
+
+  /// Ícone e cor por tipo de insight, para leitura rápida na lista.
+  (IconData, Color) get _visual => switch (insight.kind) {
+        InsightKind.wastedSpend => (Icons.money_off_outlined, AppColors.error),
+        InsightKind.annualSwitch => (Icons.swap_horiz_rounded, AppColors.success),
+        InsightKind.overlap => (Icons.content_copy_outlined, AppColors.secondary),
+        InsightKind.priceIncrease => (Icons.trending_up_rounded, AppColors.warning),
+        InsightKind.concentration => (Icons.pie_chart_outline, AppColors.info),
+        InsightKind.costPerUse => (Icons.calculate_outlined, AppColors.catAI),
+        InsightKind.projection => (Icons.timeline_outlined, AppColors.secondary),
+        InsightKind.billingSpike => (Icons.event_busy_outlined, AppColors.warning),
+        InsightKind.summary => (Icons.info_outline, AppColors.info),
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final (icon, color) = _visual;
+
+    return CustomCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: color, size: 22),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            insight.title,
+                            style: theme.textTheme.titleMedium?.copyWith(fontSize: 15),
+                          ),
+                        ),
+                        if (insight.isLocked) ...<Widget>[
+                          const SizedBox(width: 8),
+                          const ProBadge(compact: true),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(insight.description, style: theme.textTheme.bodyMedium),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (insight.isActionable) ...<Widget>[
+            const SizedBox(height: 14),
+            Row(
+              children: <Widget>[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: AppColors.success.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '${CurrencyFormatter.format(insight.potentialAnnualSavings)}/ano',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.success,
+                    ),
+                  ),
+                ),
+                const Spacer(),
+                if (onAction != null && insight.actionLabel != null)
+                  TextButton(
+                    onPressed: onAction,
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Text(insight.actionLabel!),
+                  ),
+              ],
+            ),
+          ],
         ],
       ),
     );
