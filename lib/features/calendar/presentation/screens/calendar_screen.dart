@@ -1,14 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
 import 'package:table_calendar/table_calendar.dart';
+
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/utils/currency_formatter.dart';
+import '../../../../core/utils/date_formatter.dart';
+import '../../../../core/utils/recurrence.dart';
 import '../../../../core/widgets/custom_card.dart';
-import 'package:ecostream/features/categories/domain/category_model.dart';
-import 'package:ecostream/features/subscriptions/domain/subscription_model.dart';
-import 'package:ecostream/features/subscriptions/presentation/controllers/subscription_controller.dart';
+import '../../../categories/domain/category_model.dart';
+import '../../../subscriptions/domain/subscription_model.dart';
+import '../../../subscriptions/presentation/controllers/subscription_controller.dart';
 
+/// Calendário de cobranças.
+///
+/// Projeta as cobranças recorrentes de cada assinatura dentro do mês visualizado,
+/// em vez de marcar apenas a `nextBillingDate`. Antes, ao avançar para o mês
+/// seguinte, o calendário aparecia vazio — as cobranças existem todo mês, mas só a
+/// próxima estava mapeada.
 class CalendarScreen extends ConsumerStatefulWidget {
   const CalendarScreen({super.key});
 
@@ -17,220 +25,248 @@ class CalendarScreen extends ConsumerStatefulWidget {
 }
 
 class _CalendarScreenState extends ConsumerState<CalendarScreen> {
-  CalendarFormat _calendarFormat = CalendarFormat.month;
-  DateTime _focusedDay = DateTime.now();
-  DateTime? _selectedDay;
+  CalendarFormat _format = CalendarFormat.month;
+  late DateTime _focusedDay;
+  late DateTime _selectedDay;
 
   @override
   void initState() {
     super.initState();
-    _selectedDay = DateTime.now();
+    final today = Recurrence.dateOnly(DateTime.now());
+    _focusedDay = today;
+    _selectedDay = today;
+  }
+
+  /// Cobranças por dia dentro do mês de [month].
+  Map<DateTime, List<SubscriptionModel>> _eventsForMonth(
+    List<SubscriptionModel> subscriptions,
+    DateTime month,
+  ) {
+    final start = DateTime(month.year, month.month);
+    final end = DateTime(month.year, month.month + 1, 0);
+    final events = <DateTime, List<SubscriptionModel>>{};
+
+    for (final sub in subscriptions) {
+      final occurrences = Recurrence.occurrencesBetween(
+        firstBillingDate: sub.nextBillingDate,
+        cycle: sub.cycle,
+        start: start,
+        end: end,
+        anchorDay: sub.billingDay,
+      );
+      for (final date in occurrences) {
+        events.putIfAbsent(date, () => <SubscriptionModel>[]).add(sub);
+      }
+    }
+
+    return events;
   }
 
   @override
   Widget build(BuildContext context) {
-    final subState = ref.watch(subscriptionControllerProvider);
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
+    final subscriptions = ref.watch(activeSubscriptionsProvider);
+    final events = _eventsForMonth(subscriptions, _focusedDay);
 
-    // Assinaturas ativas no mês visualizado
-    final activeSubs = subState.subscriptions.where((s) => s.status == SubscriptionStatus.active).toList();
+    List<SubscriptionModel> eventsOf(DateTime day) =>
+        events[Recurrence.dateOnly(day)] ?? const <SubscriptionModel>[];
 
-    // Mapeamento de eventos por dia
-    Map<DateTime, List<SubscriptionModel>> events = {};
-    for (var sub in activeSubs) {
-      final dateKey = DateTime(sub.nextBillingDate.year, sub.nextBillingDate.month, sub.nextBillingDate.day);
-      if (events[dateKey] == null) {
-        events[dateKey] = [];
-      }
-      events[dateKey]!.add(sub);
-    }
+    final selectedEvents = eventsOf(_selectedDay);
 
-    List<SubscriptionModel> getEventsForDay(DateTime day) {
-      final key = DateTime(day.year, day.month, day.day);
-      return events[key] ?? [];
-    }
-
-    final selectedDayEvents = _selectedDay != null ? getEventsForDay(_selectedDay!) : [];
+    // Total previsto no mês visualizado: soma de todas as ocorrências projetadas,
+    // que é diferente do "gasto mensal equivalente" do dashboard.
+    final monthTotal = events.values
+        .expand((list) => list)
+        .fold<double>(0, (sum, sub) => sum + sub.price);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Calendário de Cobranças'),
-      ),
+      appBar: AppBar(title: const Text('Calendário de cobranças')),
       body: Column(
-        children: [
-          // Banner de Total Previsto no Mês
+        children: <Widget>[
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
             child: CustomCard(
-              backgroundColor: isDark ? const Color(0xFF1E293B) : AppColors.primary.withOpacity(0.1),
-              border: Border.all(color: AppColors.primary.withOpacity(0.3)),
+              backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.08),
+              borderColor: theme.colorScheme.primary.withValues(alpha: 0.28),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
+                children: <Widget>[
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          'Previsto em ${DateFormatter.monthYearCapitalized(_focusedDay)}',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          CurrencyFormatter.format(monthTotal),
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                   Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: <Widget>[
                       Text(
-                        'Total Previsto Este Mês',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        '${events.values.fold<int>(0, (sum, l) => sum + l.length)}',
+                        style: theme.textTheme.titleLarge?.copyWith(fontSize: 20),
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        CurrencyFormatter.formatBRL(subState.totalMonthlySpend),
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.primary,
-                        ),
-                      ),
+                      Text('cobranças', style: theme.textTheme.bodySmall),
                     ],
                   ),
-                  const Icon(Icons.calendar_month_outlined, color: AppColors.primary, size: 32),
                 ],
               ),
             ),
           ),
 
-          // Tabela Calendário
           TableCalendar<SubscriptionModel>(
             locale: 'pt_BR',
-            firstDay: DateTime.now().subtract(const Duration(days: 365)),
-            lastDay: DateTime.now().add(const Duration(days: 365 * 2)),
+            firstDay: DateTime(DateTime.now().year - 2),
+            lastDay: DateTime(DateTime.now().year + 3, 12, 31),
             focusedDay: _focusedDay,
-            calendarFormat: _calendarFormat,
+            calendarFormat: _format,
+            startingDayOfWeek: StartingDayOfWeek.sunday,
+            availableCalendarFormats: const <CalendarFormat, String>{
+              CalendarFormat.month: 'Mês',
+              CalendarFormat.twoWeeks: '2 semanas',
+              CalendarFormat.week: 'Semana',
+            },
             selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
-            eventLoader: getEventsForDay,
-            startingDayOfWeek: StartingDayOfWeek.monday,
+            eventLoader: eventsOf,
+            onDaySelected: (selected, focused) {
+              setState(() {
+                _selectedDay = Recurrence.dateOnly(selected);
+                _focusedDay = focused;
+              });
+            },
+            onFormatChanged: (format) => setState(() => _format = format),
+            onPageChanged: (focused) => setState(() => _focusedDay = focused),
+            headerStyle: HeaderStyle(
+              titleCentered: true,
+              formatButtonShowsNext: false,
+              titleTextStyle: theme.textTheme.titleMedium ?? const TextStyle(),
+              formatButtonDecoration: BoxDecoration(
+                border: Border.all(color: theme.colorScheme.outlineVariant),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              formatButtonTextStyle: TextStyle(
+                fontSize: 12,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
             calendarStyle: CalendarStyle(
-              todayDecoration: const BoxDecoration(
-                color: AppColors.secondary,
+              outsideDaysVisible: false,
+              todayDecoration: BoxDecoration(
+                color: theme.colorScheme.primary.withValues(alpha: 0.25),
                 shape: BoxShape.circle,
               ),
-              selectedDecoration: const BoxDecoration(
-                color: AppColors.primary,
+              selectedDecoration: BoxDecoration(
+                color: theme.colorScheme.primary,
                 shape: BoxShape.circle,
               ),
               markerDecoration: const BoxDecoration(
-                color: AppColors.error,
+                color: AppColors.warning,
                 shape: BoxShape.circle,
               ),
               markersMaxCount: 3,
+              defaultTextStyle: TextStyle(color: theme.colorScheme.onSurface),
+              weekendTextStyle: TextStyle(color: theme.colorScheme.onSurfaceVariant),
             ),
-            headerStyle: const HeaderStyle(
-              formatButtonVisible: false,
-              titleCentered: true,
-              titleTextStyle: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            onDaySelected: (selectedDay, focusedDay) {
-              setState(() {
-                _selectedDay = selectedDay;
-                _focusedDay = focusedDay;
-              });
-            },
-            onFormatChanged: (format) {
-              setState(() => _calendarFormat = format);
-            },
-            onPageChanged: (focusedDay) {
-              _focusedDay = focusedDay;
-            },
           ),
+          const Divider(height: 16),
 
-          const Divider(height: 1),
-
-          // Lista de Cobranças do Dia Selecionado ou Próximas do Mês
           Expanded(
-            child: Container(
-              color: isDark ? AppColors.bgDark : Colors.grey.shade50,
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _selectedDay != null
-                        ? 'Cobranças em ${DateFormat('dd/MM/yyyy').format(_selectedDay!)}'
-                        : 'Selecione um dia',
-                    style: theme.textTheme.titleLarge?.copyWith(fontSize: 16),
-                  ),
-                  const SizedBox(height: 12),
-
-                  Expanded(
-                    child: selectedDayEvents.isEmpty
-                        ? Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Icon(Icons.event_available, size: 48, color: AppColors.success),
-                                const SizedBox(height: 8),
-                                Text(
-                                  'Nenhuma cobrança nesta data.',
-                                  style: theme.textTheme.bodyMedium,
-                                ),
-                              ],
-                            ),
-                          )
-                        : ListView.separated(
-                            itemCount: selectedDayEvents.length,
-                            separatorBuilder: (context, index) => const SizedBox(height: 10),
-                            itemBuilder: (context, index) {
-                              final sub = selectedDayEvents[index];
-                              final cat = CategoryModel.defaultCategories.firstWhere(
-                                (c) => c.id == sub.categoryId,
-                                orElse: () => CategoryModel.defaultCategories.last,
-                              );
-
-                              return CustomCard(
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.all(10),
-                                      decoration: BoxDecoration(
-                                        color: cat.color.withOpacity(0.15),
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      child: Icon(cat.icon, color: cat.color, size: 22),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            sub.name,
-                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                                          ),
-                                          const SizedBox(height: 2),
-                                          Text(
-                                            '${cat.name} • ${sub.paymentMethod}',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    Text(
-                                      CurrencyFormatter.formatBRL(sub.price),
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16,
-                                        color: AppColors.primary,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
+            child: selectedEvents.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: <Widget>[
+                          Icon(
+                            Icons.event_available_outlined,
+                            size: 40,
+                            color: theme.colorScheme.outline,
                           ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Nenhuma cobrança em '
+                            '${DateFormatter.longDate(_selectedDay)}.',
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.bodyMedium,
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                    itemCount: selectedEvents.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final sub = selectedEvents[index];
+                      final category = CategoryModel.byId(sub.categoryId);
+
+                      return CustomCard(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                        child: Row(
+                          children: <Widget>[
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: category.color.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(
+                                category.icon,
+                                color: category.color,
+                                size: 20,
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  Text(
+                                    sub.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: theme.textTheme.titleMedium?.copyWith(
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    sub.paymentMethod,
+                                    style: theme.textTheme.bodySmall,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Text(
+                              CurrencyFormatter.format(sub.price),
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
                   ),
-                ],
-              ),
-            ),
           ),
         ],
       ),

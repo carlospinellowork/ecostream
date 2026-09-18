@@ -1,97 +1,106 @@
 import 'package:flutter/material.dart';
-import '../constants/app_colors.dart';
 
+/// Variantes de botão do app.
+enum ButtonVariant {
+  /// Ação principal da tela. No máximo uma por tela.
+  primary,
+
+  /// Ação secundária, com contorno.
+  outlined,
+
+  /// Ação terciária, sem fundo.
+  text,
+
+  /// Ação destrutiva (cancelar assinatura, excluir conta).
+  destructive,
+}
+
+/// Botão padrão do app.
+///
+/// Encapsula o estado de carregamento para que nenhuma tela precise trocar o
+/// `child` manualmente — e, mais importante, garante que o botão fique desabilitado
+/// enquanto carrega. Toque duplo em "Entrar" disparava duas autenticações antes.
 class CustomButton extends StatelessWidget {
+  const CustomButton({
+    required this.text,
+    super.key,
+    this.onPressed,
+    this.isLoading = false,
+    this.variant = ButtonVariant.primary,
+    this.icon,
+    this.expanded = true,
+  });
+
   final String text;
   final VoidCallback? onPressed;
   final bool isLoading;
-  final bool isOutlined;
+  final ButtonVariant variant;
   final IconData? icon;
 
-  const CustomButton({
-    super.key,
-    required this.text,
-    this.onPressed,
-    this.isLoading = false,
-    this.isOutlined = false,
-    this.icon,
-  });
+  /// Ocupa toda a largura disponível. Desligue em botões dentro de linhas.
+  final bool expanded;
 
   @override
   Widget build(BuildContext context) {
-    if (isOutlined) {
-      return OutlinedButton(
-        onPressed: isLoading ? null : onPressed,
-        style: OutlinedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
-          side: const BorderSide(color: AppColors.primary, width: 1.5),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
+    final colors = Theme.of(context).colorScheme;
+    final effectiveOnPressed = isLoading ? null : onPressed;
+
+    final button = switch (variant) {
+      ButtonVariant.primary => FilledButton(
+          onPressed: effectiveOnPressed,
+          child: _label(colors.onPrimary),
         ),
-        child: isLoading
-            ? const SizedBox(
-                height: 20,
-                width: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (icon != null) ...[
-                    Icon(icon, size: 20, color: AppColors.primary),
-                    const SizedBox(width: 8),
-                  ],
-                  Text(
-                    text,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                ],
-              ),
+      ButtonVariant.outlined => OutlinedButton(
+          onPressed: effectiveOnPressed,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: colors.primary,
+            side: BorderSide(color: colors.primary.withValues(alpha: 0.6), width: 1.5),
+          ),
+          child: _label(colors.primary),
+        ),
+      ButtonVariant.text => TextButton(
+          onPressed: effectiveOnPressed,
+          child: _label(colors.primary),
+        ),
+      ButtonVariant.destructive => OutlinedButton(
+          onPressed: effectiveOnPressed,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: colors.error,
+            side: BorderSide(color: colors.error.withValues(alpha: 0.6), width: 1.5),
+          ),
+          child: _label(colors.error),
+        ),
+    };
+
+    if (!expanded) return button;
+    return SizedBox(width: double.infinity, child: button);
+  }
+
+  Widget _label(Color foreground) {
+    if (isLoading) {
+      return SizedBox(
+        height: 20,
+        width: 20,
+        child: CircularProgressIndicator(strokeWidth: 2.4, color: foreground),
       );
     }
 
-    return ElevatedButton(
-      onPressed: isLoading ? null : onPressed,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: AppColors.primary,
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
-        elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-      ),
-      child: isLoading
-          ? const SizedBox(
-              height: 20,
-              width: 20,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Colors.white,
-              ),
-            )
-          : Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (icon != null) ...[
-                  Icon(icon, size: 20, color: Colors.white),
-                  const SizedBox(width: 8),
-                ],
-                Text(
-                  text,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
-                  ),
-                ),
-              ],
-            ),
-    );
+    final content = icon == null
+        ? Text(text, textAlign: TextAlign.center)
+        : Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              Icon(icon, size: 20),
+              const SizedBox(width: 8),
+              Text(text),
+            ],
+          );
+
+    // Rótulo longo — ou fonte ampliada nas configurações de acessibilidade —
+    // estourava a linha do botão em vez de se ajustar. `scaleDown` reduz a escala
+    // e preserva o texto inteiro, melhor do que cortar um valor em reais com
+    // reticências ("Assinar anual — R$ 95,90").
+    return FittedBox(fit: BoxFit.scaleDown, child: content);
   }
 }

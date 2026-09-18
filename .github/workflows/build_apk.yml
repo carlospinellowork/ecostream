@@ -1,4 +1,4 @@
-name: EcoStream App Android Build
+name: EcoStream CI
 
 on:
   push:
@@ -11,40 +11,84 @@ on:
       - master
   workflow_dispatch:
 
-jobs:
-  build:
-    name: Build APK Release
-    runs-on: ubuntu-latest
+# Um push novo cancela o build anterior do mesmo branch: sem isso a fila de
+# Actions acumula builds de APK que já não interessam.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
+jobs:
+  verify:
+    name: Análise estática e testes
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Java JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Set up Flutter SDK
+      - name: Configurar Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
 
-      - name: Make Gradlew Executable
-        run: chmod +x android/gradlew || true
-
-      - name: Install dependencies
+      - name: Instalar dependências
         run: flutter pub get
 
-      - name: Run tests
-        run: flutter test
+      - name: Conferir formatação
+        # Não bloqueia: a formatação é convenção, não correção. Serve de aviso.
+        run: dart format --output=none --set-exit-if-changed lib test
+        continue-on-error: true
+
+      - name: Análise estática
+        # `--no-fatal-infos` mantém as regras de estilo como orientação no editor
+        # sem derrubar o build. Warnings e errors continuam bloqueando.
+        run: flutter analyze --no-fatal-infos
+
+      - name: Testes
+        run: flutter test --coverage --reporter expanded
+
+      - name: Publicar cobertura
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/lcov.info
+          if-no-files-found: ignore
+
+  build:
+    name: Build APK Release
+    runs-on: ubuntu-latest
+    # Só gasta tempo de build depois que análise e testes passaram.
+    needs: verify
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Configurar Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Tornar o Gradlew executável
+        run: chmod +x android/gradlew || true
+
+      - name: Instalar dependências
+        run: flutter pub get
 
       - name: Build APK (Release)
-        run: flutter build apk --release --no-tree-shake-icons --android-skip-build-dependency-validation
+        run: >-
+          flutter build apk --release
+          --no-tree-shake-icons
+          --android-skip-build-dependency-validation
 
-      - name: Upload APK Artifact
+      - name: Publicar APK
         uses: actions/upload-artifact@v4
         with:
           name: ecostream-app-release
